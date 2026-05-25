@@ -1,0 +1,8 @@
+{
+    "name": "libsql-cpp",
+    "version": "1.0.0",
+    "description": "An SQLite3 API plugin for Endstone.",
+    "dependencies": [
+        "sqlite3"
+    ]
+}
