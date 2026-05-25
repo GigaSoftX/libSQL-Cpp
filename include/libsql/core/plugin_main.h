@@ -1,11 +1,13 @@
 #pragma once
 
 #include <endstone/endstone.hpp>
+#include <memory>
 
 #include "libsql/manager/connection_manager.h"
 #include "libsql/manager/query_manager.h"
 #include "libsql/manager/table_manager.h"
 #include "libsql/model/query_result.h"
+#include "libsql/database.h"
 
 namespace libsql {
 
@@ -16,7 +18,12 @@ public:
     void onEnable() override;
     void onDisable() override;
 
-    // Access the shared managers (other plugins use these)
+    // Config-like API: open a database and use it like YAML/JSON
+    [[nodiscard]] Database openDatabase(const std::string& path) {
+        return Database(path, connection_manager_, query_manager_, table_manager_);
+    }
+
+    // Access the shared managers (advanced usage)
     [[nodiscard]] ConnectionManager& getConnectionManager() { return connection_manager_; }
     [[nodiscard]] QueryManager& getQueryManager() { return query_manager_; }
     [[nodiscard]] TableManager& getTableManager() { return table_manager_; }

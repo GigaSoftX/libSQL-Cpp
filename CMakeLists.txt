@@ -21,6 +21,7 @@ endstone_add_plugin(${PROJECT_NAME}
     src/manager/query_manager.cpp
     src/manager/table_manager.cpp
     src/model/query_result.cpp
+    src/database.cpp
 )
 
 target_include_directories(${PROJECT_NAME} PUBLIC

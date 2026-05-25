@@ -1,25 +1,25 @@
 # libSQL-Cpp
 
 A lightweight SQLite3 API plugin for [Endstone](https://github.com/EndstoneMC/endstone) servers.  
-Provides a clean, ready-to-use database layer so other C++ plugins don't have to manage SQLite themselves.
+Use databases as easily as config files — define schema, get/set records, no SQL required.
 
 ---
 
 ## Features
 
-- **Connection Management** — Open/close databases with WAL mode, foreign keys, and busy timeout pre-configured.
-- **Query Execution** — Parameterized queries with type-safe binding (int64, double, string, blob, null).
-- **Table Management** — Auto-create tables, sync schema changes, inspect columns at runtime.
-- **Transactions** — Execute multiple statements atomically with automatic rollback on failure.
-- **Thread-Safe** — Mutex-protected connection pool safe for multi-threaded access.
+- **Config-Like API** — Read and write database records like YAML/JSON: `table.set(key, data)` / `table.get(key)`.
+- **Auto Schema Sync** — Declare your columns once. Tables are created or updated automatically.
+- **Type-Safe** — Strongly typed values (int64, double, string, blob) with `std::optional` returns.
+- **Transactions** — Atomic multi-statement execution with automatic rollback.
+- **WAL Mode** — Pre-configured for concurrent read performance out of the box.
+- **Thread-Safe** — Mutex-protected connections safe for multi-threaded plugins.
+- **Raw SQL Escape Hatch** — Full query/execute access when you need it.
 
 ---
 
 ## Quick Start
 
 ### 1. Link against libSQL-Cpp
-
-In your plugin's `CMakeLists.txt`:
 
 ```cmake
 target_link_libraries(${PROJECT_NAME} PRIVATE libsql_cpp)
@@ -30,95 +30,141 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 
 Add `libsql_cpp` to your plugin's `depend` list so it loads first.
 
-### 2. Get the API instance
+### 2. Open a database
 
 ```cpp
 #include <libsql/core/plugin_main.h>
 
 auto* api = libsql::PluginMain::getInstance();
+auto db = api->openDatabase("plugins/my_plugin/data.sqlite");
 ```
 
-### 3. Open a database
+### 3. Define your schema
 
 ```cpp
-auto* db = api->getConnectionManager().open("plugins/my_plugin/data.sqlite");
+using namespace libsql;
+
+auto players = db.table("players", {
+    {"uuid",  Type::TEXT,    Primary | NotNull},
+    {"name",  Type::TEXT,    NotNull},
+    {"coins", Type::INTEGER, None, "0"},
+    {"rank",  Type::TEXT,    None, "'default'"}
+});
 ```
 
-### 4. Define and sync your schema
+That's it. The table is created if it doesn't exist, or missing columns are added automatically.
+
+### 4. Write data
 
 ```cpp
-using libsql::ColumnDef;
-
-std::vector<ColumnDef> schema = {
-    {"uuid",  "TEXT",    .primary_key = true, .not_null = true},
-    {"name",  "TEXT",    .not_null = true},
-    {"coins", "INTEGER", .default_value = "0"},
-    {"rank",  "TEXT",    .default_value = "'default'"}
-};
-
-api->getTableManager().syncSchema(db, "players", schema);
+players.set("550e8400-...", {
+    {"name",  std::string("Steve")},
+    {"coins", int64_t(100)},
+    {"rank",  std::string("vip")}
+});
 ```
 
-`syncSchema` creates the table if missing, or adds new columns if your schema evolves.
-
-### 5. Insert data
+### 5. Read data
 
 ```cpp
-api->getQueryManager().execute(db,
-    "INSERT OR REPLACE INTO players (uuid, name, coins) VALUES (?, ?, ?)",
-    {std::string("550e8400-..."), std::string("Steve"), int64_t(100)}
-);
-```
-
-### 6. Query data
-
-```cpp
-auto result = api->getQueryManager().query(db,
-    "SELECT name, coins FROM players WHERE uuid = ?",
-    {std::string("550e8400-...")}
-);
-
-if (!result.empty()) {
-    auto name  = result.get<std::string>(0, "name");   // -> "Steve"
-    auto coins = result.get<int64_t>(0, "coins");      // -> 100
+// Get full record
+auto record = players.get("550e8400-...");
+if (record) {
+    auto name = std::get<std::string>((*record)["name"]);  // "Steve"
 }
+
+// Get a single field directly
+auto coins = players.get<int64_t>("550e8400-...", "coins");  // -> std::optional<int64_t>(100)
 ```
 
-### 7. Transactions
+### 6. Query and filter
 
 ```cpp
-bool ok = api->getQueryManager().transaction(db, {
-    {"UPDATE players SET coins = coins - ? WHERE uuid = ?", {int64_t(50), std::string(sender_uuid)}},
-    {"UPDATE players SET coins = coins + ? WHERE uuid = ?", {int64_t(50), std::string(receiver_uuid)}}
+// Check existence
+if (players.has("550e8400-...")) { /* ... */ }
+
+// Find by field value
+auto vips = players.where("rank", std::string("vip"));
+
+// Get all records
+auto everyone = players.all();
+
+// Count
+size_t total = players.count();
+```
+
+### 7. Remove data
+
+```cpp
+players.remove("550e8400-...");  // Delete one record
+players.clear();                  // Delete all records
+```
+
+### 8. Transactions (atomic operations)
+
+```cpp
+db.transaction({
+    {"UPDATE players SET coins = coins - ? WHERE uuid = ?", {int64_t(50), std::string(sender)}},
+    {"UPDATE players SET coins = coins + ? WHERE uuid = ?", {int64_t(50), std::string(receiver)}}
 });
 // Both succeed or both rollback
+```
+
+### 9. Raw SQL (escape hatch)
+
+```cpp
+auto result = db.rawQuery("SELECT * FROM players WHERE coins > ?", {int64_t(500)});
+db.rawExecute("DELETE FROM players WHERE coins < ?", {int64_t(0)});
 ```
 
 ---
 
 ## API Reference
 
-| Manager | Method | Description |
-|---------|--------|-------------|
-| `ConnectionManager` | `open(path)` | Open or reuse a database connection |
-| | `close(path)` | Close a specific connection |
-| | `closeAll()` | Close all connections |
-| | `isOpen(path)` | Check if a database is open |
-| | `getHandle(path)` | Get raw `sqlite3*` for advanced use |
-| `QueryManager` | `query(db, sql, params)` | Execute SELECT, returns `QueryResult` |
-| | `execute(db, sql, params)` | Execute INSERT/UPDATE/DELETE, returns affected rows |
-| | `transaction(db, statements)` | Run multiple statements atomically |
-| | `lastInsertId(db)` | Get last auto-increment ID |
-| `TableManager` | `createTable(db, name, columns)` | Create table if not exists |
-| | `dropTable(db, name)` | Drop a table |
-| | `tableExists(db, name)` | Check table existence |
-| | `getColumnNames(db, name)` | List existing columns |
-| | `addColumn(db, name, column)` | Add a single column |
-| | `syncSchema(db, name, columns)` | Create or update table to match schema |
+### Database
 
-### Parameter Types
+| Method | Description |
+|--------|-------------|
+| `table(name, schema)` | Define/sync a table, returns `Table` handle |
+| `operator[](name)` | Get a previously defined table |
+| `hasTable(name)` | Check if table exists |
+| `dropTable(name)` | Drop a table |
+| `rawQuery(sql, params)` | Execute SELECT, returns `QueryResult` |
+| `rawExecute(sql, params)` | Execute INSERT/UPDATE/DELETE |
+| `transaction(statements)` | Run statements atomically |
+| `handle()` | Get raw `sqlite3*` pointer |
 
-Bind values using `libsql::Param`:
+### Table
+
+| Method | Description |
+|--------|-------------|
+| `set(key, record)` | Insert or replace a record |
+| `get(key)` | Get full record by primary key |
+| `get<T>(key, field)` | Get a single typed field value |
+| `has(key)` | Check if record exists |
+| `remove(key)` | Delete a record |
+| `all()` | Get all records |
+| `where(field, value)` | Find records matching a condition |
+| `count()` | Count total records |
+| `clear()` | Delete all records |
+| `name()` | Get table name |
+
+### Column Definition
+
+```cpp
+Column(name, type, flags, default_value)
+```
+
+| Type | Flags | Example |
+|------|-------|---------|
+| `Type::TEXT` | `Primary` | `{"id", Type::TEXT, Primary \| NotNull}` |
+| `Type::INTEGER` | `NotNull` | `{"age", Type::INTEGER, NotNull}` |
+| `Type::REAL` | `Unique` | `{"score", Type::REAL, Unique}` |
+| `Type::BLOB` | `None` | `{"data", Type::BLOB}` |
+
+Flags can be combined: `Primary | NotNull | Unique`
+
+### Value Types
 
 | C++ Type | SQLite Type |
 |----------|-------------|
@@ -128,17 +174,42 @@ Bind values using `libsql::Param`:
 | `std::string` | TEXT |
 | `std::vector<uint8_t>` | BLOB |
 
-### QueryResult
+---
+
+## Full Example Plugin
 
 ```cpp
-result.empty()                        // No rows?
-result.size()                         // Row count
-result.getColumns()                   // Column names
-result.getRow(index)                  // Get a row as map
-result.get<std::string>(row, "col")   // Typed value access
-result.get<int64_t>(row, "col")       // Returns std::optional<T>
+#include <endstone/endstone.hpp>
+#include <libsql/core/plugin_main.h>
 
-for (const auto& row : result) { }   // Range-based iteration
+class EconomyPlugin : public endstone::Plugin {
+    libsql::Table players_;
+
+public:
+    void onEnable() override {
+        auto* api = libsql::PluginMain::getInstance();
+        auto db = api->openDatabase("plugins/economy/economy.sqlite");
+
+        players_ = db.table("players", {
+            {"uuid",    libsql::Type::TEXT,    libsql::Primary | libsql::NotNull},
+            {"name",    libsql::Type::TEXT,    libsql::NotNull},
+            {"balance", libsql::Type::INTEGER, libsql::None, "1000"}
+        });
+
+        getLogger().info("Economy plugin enabled!");
+    }
+
+    void addCoins(const std::string& uuid, int64_t amount) {
+        auto current = players_.get<int64_t>(uuid, "balance").value_or(0);
+        players_.set(uuid, {
+            {"balance", current + amount}
+        });
+    }
+
+    int64_t getBalance(const std::string& uuid) {
+        return players_.get<int64_t>(uuid, "balance").value_or(0);
+    }
+};
 ```
 
 ---
